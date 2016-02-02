@@ -2,7 +2,6 @@ require_relative "version"
 require_relative "exceptions"
 require_relative "guard"
 require_relative "callback"
-require_relative "event_transitions"
 require_relative "adapters/memory_transition"
 
 module Statesman
@@ -32,10 +31,6 @@ module Statesman
         @states ||= []
       end
 
-      def events
-        @events ||= {}
-      end
-
       def state(name, options = { initial: false })
         name = name.to_s
         if options[:initial]
@@ -43,10 +38,6 @@ module Statesman
           @initial_state = name
         end
         states << name
-      end
-
-      def event(name, &block)
-        EventTransitions.new(self, name, &block)
       end
 
       def successors
@@ -62,9 +53,9 @@ module Statesman
         }
       end
 
-      def transition(options = { from: nil, to: nil }, event = nil)
-        from = to_s_or_nil(options[:from])
-        to = array_to_s_or_nil(options[:to])
+      def transition(from: nil, to: nil)
+        from = to_s_or_nil(from)
+        to = array_to_s_or_nil(to)
 
         raise InvalidStateError, "No to states provided." if to.empty?
 
@@ -73,12 +64,6 @@ module Statesman
         ([from] + to).each { |state| validate_state(state) }
 
         successors[from] += to
-
-        if event
-          events[event] ||= {}
-          events[event][from] ||= []
-          events[event][from]  += to
-        end
       end
 
       def before_transition(options = { from: nil, to: nil }, &block)
@@ -162,7 +147,7 @@ module Statesman
 
       def validate_initial_state(state)
         unless initial_state.nil?
-          raise InvalidStateError, "Cannot set initial state to '#{state}', " +
+          raise InvalidStateError, "Cannot set initial state to '#{state}', " \
                                    "already defined as #{initial_state}."
         end
       end
@@ -177,19 +162,23 @@ module Statesman
     end
 
     def initialize(object,
-                      options = {
-                        transition_class: Statesman::Adapters::MemoryTransition
-                      })
+                   options = {
+                     transition_class: Statesman::Adapters::MemoryTransition
+                   })
       @object = object
       @transition_class = options[:transition_class]
-      @storage_adapter = adapter_class(@transition_class)
-                          .new(@transition_class, object, self)
+      @storage_adapter = adapter_class(@transition_class).new(
+        @transition_class, object, self, options)
       send(:after_initialize) if respond_to? :after_initialize
     end
 
-    def current_state
-      last_action = last_transition
+    def current_state(force_reload: false)
+      last_action = last_transition(force_reload: force_reload)
       last_action ? last_action.to_state : self.class.initial_state
+    end
+
+    def in_state?(*states)
+      states.flatten.any? { |state| current_state == state.to_s }
     end
 
     def allowed_transitions
@@ -198,11 +187,11 @@ module Statesman
       end
     end
 
-    def last_transition
-      @storage_adapter.last
+    def last_transition(force_reload: false)
+      @storage_adapter.last(force_reload: force_reload)
     end
 
-    def can_transition_to?(new_state, metadata = nil)
+    def can_transition_to?(new_state, metadata = {})
       validate_transition(from: current_state,
                           to: new_state,
                           metadata: metadata)
@@ -215,7 +204,7 @@ module Statesman
       @storage_adapter.history
     end
 
-    def transition_to!(new_state, metadata = nil)
+    def transition_to!(new_state, metadata = {})
       initial_state = current_state
       new_state = new_state.to_s
 
@@ -228,47 +217,15 @@ module Statesman
       true
     end
 
-    def trigger!(event_name, metadata = nil)
-      transition_targets = transitions_for(event_name).fetch(current_state) do
-        raise Statesman::TransitionFailedError,
-              "State #{current_state} not found for Event #{event_name}"
-      end
-
-      failed_targets = []
-
-      transition_targets.each do |target_state|
-        break if transition_to(target_state, metadata)
-        failed_targets << target_state
-      end
-
-      raise Statesman::GuardFailedError,
-            "All guards returned false when triggering event #{event_name}" if
-          transition_targets == failed_targets
-      true
-    end
-
     def execute(phase, initial_state, new_state, transition)
       callbacks = callbacks_for(phase, from: initial_state, to: new_state)
       callbacks.each { |cb| cb.call(@object, transition) }
     end
 
-    def transition_to(new_state, metadata = nil)
+    def transition_to(new_state, metadata = {})
       self.transition_to!(new_state, metadata)
     rescue TransitionFailedError, GuardFailedError
       false
-    end
-
-    def trigger(event_name, metadata = nil)
-      self.trigger!(event_name, metadata)
-    rescue TransitionFailedError, GuardFailedError
-      false
-    end
-
-    def available_events
-      state = current_state
-      self.class.events.select do |_, transitions|
-        transitions.key?(state)
-      end.map(&:first)
     end
 
     private
@@ -278,13 +235,6 @@ module Statesman
         Adapters::Memory
       else
         Statesman.storage_adapter
-      end
-    end
-
-    def transitions_for(event_name)
-      self.class.events.fetch(event_name) do
-        raise Statesman::TransitionFailedError,
-              "Event #{event_name} not found"
       end
     end
 

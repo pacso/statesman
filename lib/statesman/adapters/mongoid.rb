@@ -6,7 +6,7 @@ module Statesman
       attr_reader :transition_class
       attr_reader :parent_model
 
-      def initialize(transition_class, parent_model, observer)
+      def initialize(transition_class, parent_model, observer, _ = {})
         @transition_class = transition_class
         @parent_model = parent_model
         @observer = observer
@@ -36,8 +36,12 @@ module Statesman
         transitions_for_parent.asc(:sort_key)
       end
 
-      def last
-        @last_transition ||= history.last
+      def last(force_reload: false)
+        if force_reload
+          @last_transition = history.last
+        else
+          @last_transition ||= history.last
+        end
       end
 
       private
@@ -55,7 +59,7 @@ module Statesman
       end
 
       def next_sort_key
-        (last && last.sort_key + 10) || 0
+        (last && last.sort_key + 10) || 10
       end
     end
   end

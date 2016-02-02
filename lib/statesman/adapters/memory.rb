@@ -9,7 +9,7 @@ module Statesman
 
       # We only accept mode as a parameter to maintain a consistent interface
       # with other adapters which require it.
-      def initialize(transition_class, parent_model, observer)
+      def initialize(transition_class, parent_model, observer, _ = {})
         @history = []
         @transition_class = transition_class
         @parent_model = parent_model
@@ -28,14 +28,14 @@ module Statesman
         transition
       end
 
-      def last
+      def last(*)
         @history.sort_by(&:sort_key).last
       end
 
       private
 
       def next_sort_key
-        (last && last.sort_key + 10) || 0
+        (last && last.sort_key + 10) || 10
       end
     end
   end
